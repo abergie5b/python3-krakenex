@@ -30,6 +30,27 @@ import base64
 
 from . import version
 
+
+def _retry(f):
+    def _wrapper(self, *args, **kwargs):
+        res = f(self, *args, **kwargs)
+        if len(res['error']) > 0:
+            error = res['error'][0]
+            if 'Rate limit' in error or 'rate limit' in error or error == 'EService:Unavailable':
+                time.sleep(self.retry_interval_seconds)
+                data = args[1]
+                if data and data.get('nonce'):
+                    data['nonce'] = self._nonce()
+
+                headers = args[2]
+                if headers and headers.get('API-Sign'):
+                    headers['API-Key'] = self.key
+                    headers['API-Sign'] = self._sign(data, args[0])
+            return _wrapper(self, *args, **kwargs)
+        return res
+    return _wrapper
+
+
 class API(object):
     """ Maintains a single session between this machine and Kraken.
 
@@ -47,7 +68,7 @@ class API(object):
        No query rate limiting is performed.
 
     """
-    def __init__(self, key='', secret=''):
+    def __init__(self, key='', secret='', retry_interval_seconds=30):
         """ Create an object with authentication information.
 
         :param key: (optional) key identifier for queries to the API
@@ -59,6 +80,7 @@ class API(object):
         """
         self.key = key
         self.secret = secret
+        self.retry_interval_seconds = retry_interval_seconds
         self.uri = 'https://api.kraken.com'
         self.apiversion = '0'
         self.session = requests.Session()
@@ -103,6 +125,7 @@ class API(object):
             self.secret = f.readline().strip()
         return
 
+    @_retry
     def _query(self, urlpath, data, headers=None, timeout=None):
         """ Low-level query handling.
 
